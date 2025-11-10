@@ -1,0 +1,134 @@
+<!-- client.html -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Socket.IO Chat Demo</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 16px; }
+    #chat { border: 1px solid #ccc; padding: 8px; width: 720px; height: 360px; overflow-y: auto; }
+    #presence { margin-top: 8px; }
+    #typing { color: #666; font-size: 0.9em; }
+    .msg { margin: 6px 0; }
+    .me { font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h2>Chat Demo</h2>
+
+  <div>
+    Username: <input id="username" value="User" /> Room: <input id="room" value="main" />
+    <button id="btnJoin">Join</button>
+    <button id="btnLeave">Leave</button>
+  </div>
+
+  <div id="presence"></div>
+
+  <div id="chat"></div>
+
+  <div id="typing"></div>
+
+  <form id="msgForm">
+    <input id="text" autocomplete="off" placeholder="Type a message..." style="width:600px" />
+    <button>Send</button>
+  </form>
+
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script>
+    const socket = io("http://localhost:4000", { transports: ['websocket'] });
+    const chatEl = document.getElementById("chat");
+    const presenceEl = document.getElementById("presence");
+    const typingEl = document.getElementById("typing");
+    let currentRoom = null;
+    let username = null;
+    let typingTimeout = null;
+
+    function appendMsg(msg) {
+      const d = document.createElement("div");
+      d.className = "msg";
+      const isMe = msg.senderId === socket.id;
+      d.innerHTML = `<span class="${isMe ? 'me' : ''}">${msg.username}</span>: ${msg.text} <small style="color:#888">(${new Date(msg.ts).toLocaleTimeString()})</small>`;
+      chatEl.appendChild(d);
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    // handlers
+    document.getElementById("btnJoin").onclick = () => {
+      username = document.getElementById("username").value || "Anon";
+      currentRoom = document.getElementById("room").value || "main";
+      socket.emit("join", { room: currentRoom, username }, (resp) => {
+        if (resp && resp.ok) {
+          chatEl.innerHTML = "";
+          // load history
+          (resp.history || []).forEach(appendMsg);
+          presenceEl.innerText = `Joined: ${currentRoom}`;
+        } else {
+          alert("Join failed: " + (resp && resp.reason));
+        }
+      });
+    };
+
+    document.getElementById("btnLeave").onclick = () => {
+      if (!currentRoom) return;
+      socket.emit("leave", currentRoom, (r) => {
+        currentRoom = null;
+        presenceEl.innerText = "Left room";
+      });
+    };
+
+    document.getElementById("msgForm").onsubmit = (e) => {
+      e.preventDefault();
+      const text = document.getElementById("text").value;
+      if (!text || !currentRoom) return;
+      socket.emit("message", { room: currentRoom, text }, (ack) => {
+        // optional: mark message delivered
+        console.log("ack", ack);
+      });
+      document.getElementById("text").value = "";
+      socket.emit("typing", { room: currentRoom, typing: false });
+    };
+
+    // typing logic
+    document.getElementById("text").addEventListener("input", () => {
+      if (!currentRoom) return;
+      socket.emit("typing", { room: currentRoom, typing: true });
+      clearTimeout(typingTimeout);
+      typingTimeout = setTimeout(() => {
+        socket.emit("typing", { room: currentRoom, typing: false });
+      }, 800);
+    });
+
+    // socket listeners
+    socket.on("message", (msg) => {
+      appendMsg(msg);
+    });
+
+    socket.on("presence", (users) => {
+      presenceEl.innerText = "Online: " + users.map(u => u.username || u.socketId).join(", ");
+    });
+
+    socket.on("typing", ({ username, typing }) => {
+      if (typing) typingEl.innerText = `${username} is typing...`;
+      else typingEl.innerText = "";
+    });
+
+    socket.on("user_joined", (u) => {
+      const el = document.createElement("div");
+      el.style.color = "green";
+      el.textContent = `${u.username || 'Someone'} joined`;
+      chatEl.appendChild(el);
+    });
+
+    socket.on("user_left", (u) => {
+      const el = document.createElement("div");
+      el.style.color = "gray";
+      el.textContent = `${u.username || 'Someone'} left`;
+      chatEl.appendChild(el);
+    });
+
+    socket.on("rate_limit", (info) => {
+      alert("Rate limited: " + info.reason);
+    });
+  </script>
+</body>
+</html>
